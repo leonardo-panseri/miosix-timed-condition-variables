@@ -12,7 +12,7 @@
 ## architecture
 ##
 #OPT_BOARD := lpc2138_miosix_board
-OPT_BOARD := stm32f103ze_stm3210e-eval
+#OPT_BOARD := stm32f103ze_stm3210e-eval
 #OPT_BOARD := stm32f103ve_mp3v2
 #OPT_BOARD := stm32f100rb_stm32vldiscovery
 #OPT_BOARD := stm32f103ve_strive_mini
@@ -38,7 +38,7 @@ OPT_BOARD := stm32f103ze_stm3210e-eval
 #OPT_BOARD := stm32f100c8_microboard
 #OPT_BOARD := stm32f469ni_stm32f469i-disco
 #OPT_BOARD := stm32f429zi_skyward_homeone
-#OPT_BOARD := stm32f401re_nucleo
+OPT_BOARD := stm32f401re_nucleo
 #OPT_BOARD := stm32f746zg_nucleo
 #OPT_BOARD := stm32h753xi_eval
 #OPT_BOARD := stm32f407vg_thermal_test_chip
@@ -59,8 +59,8 @@ OPT_BOARD := stm32f103ze_stm3210e-eval
 ## -O2 is recomended otherwise, as it provides a good balance between code
 ## size and speed
 ##
-#OPT_OPTIMIZATION := -O0
-OPT_OPTIMIZATION := -O2
+OPT_OPTIMIZATION := -O0
+#OPT_OPTIMIZATION := -O2
 #OPT_OPTIMIZATION := -O3
 #OPT_OPTIMIZATION := -Os
 
