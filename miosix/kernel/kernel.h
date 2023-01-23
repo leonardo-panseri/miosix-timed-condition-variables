@@ -1100,6 +1100,18 @@ struct SleepData : public IntrusiveListItem
 };
 
 /**
+ * \internal
+ * \struct Cond_data
+ * This struct is used to make a list of threads that are waiting on a condition variable.
+ * It is used by the kernel, and should not be used by end users.
+ */
+struct CondData : public IntrusiveListItem
+{
+    ///\internal Thread that is sleeping
+    Thread *p;
+};
+
+/**
  * \}
  */
 
