@@ -286,6 +286,12 @@ void IRQaddToSleepingList(SleepData *x)
     //    ContextSwitchTimer::instance().IRQsetNextInterrupt(sleepingList->front()->wakeup_time);
 }
 
+void IRQremoveFromSleepingList(SleepData *x)
+{
+    auto sleep_i = IntrusiveList<SleepData>::iterator(x);
+    sleepingList->erase(sleep_i);
+}
+
 /**
  * \internal
  * Called to check if it's time to wake some thread.
@@ -308,6 +314,8 @@ bool IRQwakeThreads(long long currentTime)
         if((*it)->p == nullptr) ++it; //Only csRecord has p==nullptr
         else {
             (*it)->p->flags.IRQsetSleep(false); //Wake thread
+            if((*it)->p->flags.isWaitingCond())
+                (*it)->p->flags.IRQsetCondWait(false);
             if (const_cast<Thread*>(cur)->getPriority() < (*it)->p->getPriority())
                 result = true;
             it = sleepingList->erase(it);

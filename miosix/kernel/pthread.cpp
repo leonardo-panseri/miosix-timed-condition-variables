@@ -54,7 +54,6 @@ extern "C" {
 //
 // Thread related API
 //
-
 int pthread_create(pthread_t *pthread, const pthread_attr_t *attr,
     void *(*start)(void *), void *arg)
 {
@@ -281,7 +280,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 //
 // Condition variable API
 //
-
+//attr is currently not considered
 int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
 {
     // TODO: Fix the size of the buffer and uncomment this
@@ -327,12 +326,36 @@ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
 
 int	pthread_cond_timedwait(pthread_cond_t *cond,
 				           pthread_mutex_t *mutex,
-				           const struct timespec *abstime) {
-    
-    // ===========================================================================================================
-    // TODO: Implement
-    // ===========================================================================================================
+				           const struct timespec *abstime)
+{
 
+    // Draft
+    // TODO: Fix the size of the buffer and uncomment this
+    // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
+    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
+    
+    FastInterruptDisableLock dLock;
+    Thread *p=Thread::IRQgetCurrentThread();
+    CondData listItem;
+    SleepData sleepData;
+    listItem.thread=p;
+    condList->push_back(&listItem); //Putting this thread last on the list (lifo policy)
+    // WHY????
+    p->flags.IRQsetCondWait(true); 
+    p->flags.IRQsetSleep(true);
+
+    unsigned int depth=IRQdoMutexUnlockAllDepthLevels(mutex);
+    {
+        FastInterruptEnableLock eLock(dLock);
+        sleepData.p=p;
+        // Why is this abstime?
+        sleepData.wakeup_time=abstime->tv_nsec;
+        Thread::yield(); //Here the wait becomes effective
+    }
+    auto cond_i = IntrusiveList<CondData>::iterator(&listItem);
+    condList->erase(cond_i);
+    IRQremoveFromSleepingList(&sleepData);
+    IRQdoMutexLockToDepth(mutex,dLock,depth);
     return 0;
 }
 
@@ -352,6 +375,8 @@ int pthread_cond_signal(pthread_cond_t *cond)
         Thread *t=condList->front()->thread;
         t->flags.IRQsetCondWait(false);
         condList->pop_front();
+        if (t->flags.isSleeping())
+            t->flags.IRQsetSleep(false);
 
         #ifdef SCHED_TYPE_EDF
         if(t->IRQgetPriority() >Thread::IRQgetCurrentThread()->IRQgetPriority())
@@ -367,16 +392,21 @@ int pthread_cond_signal(pthread_cond_t *cond)
 
 int pthread_cond_broadcast(pthread_cond_t *cond)
 {
-    /*#ifdef SCHED_TYPE_EDF
+    #ifdef SCHED_TYPE_EDF
     bool hppw=false;
     #endif //SCHED_TYPE_EDF
+    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
+
     {
         FastInterruptDisableLock lock;
-        while(cond->first!=nullptr)
+        while(!condList->empty())
         {
-            Thread *t=reinterpret_cast<Thread*>(cond->first->thread);
+            CondData *cond=condList->front();
+            Thread *t=cond->thread;
             t->flags.IRQsetCondWait(false);
-            cond->first=cond->first->next;
+            condList->pop_front();
+            if (t->flags.isSleeping())
+                t->flags.IRQsetSleep(false);
 
             #ifdef SCHED_TYPE_EDF
             if(t->IRQgetPriority() >
