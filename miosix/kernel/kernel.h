@@ -419,6 +419,8 @@ struct SleepData;
 class MemoryProfiling;
 class Mutex;
 class ConditionVariable;
+void IRQaddToSleepingList(SleepData *x);
+void IRQremoveFromSleepingList(SleepData *x);
 #ifdef WITH_PROCESSES
 class ProcessBase;
 #endif //WITH_PROCESSES
@@ -1031,6 +1033,8 @@ private:
     friend void miosix_private::IRQstackOverflowCheck();
     //Need access to status
     friend void IRQaddToSleepingList(SleepData *x);
+    //Need access to status
+    friend void IRQremoveFromSleepingList(SleepData *x);
     //Needs access to status
     friend bool IRQwakeThreads(long long currentTick);
     //Needs access to watermark, status, next
@@ -1099,20 +1103,6 @@ struct SleepData : public IntrusiveListItem
     ///\internal When this number becomes equal to the kernel tick,
     ///the thread will wake
     long long wakeup_time;
-};
-
-void IRQremoveFromSleepingList(SleepData *x);
-
-/**
- * \internal
- * \struct Cond_data
- * This struct is used to make a list of threads that are waiting on a condition variable.
- * It is used by the kernel, and should not be used by end users.
- */
-struct CondData : public IntrusiveListItem
-{
-    ///\internal Thread that is sleeping
-    Thread *thread;
 };
 
 /**

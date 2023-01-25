@@ -264,7 +264,7 @@ bool isKernelRunning()
 
 /**
  * \internal
- * Used by Thread::sleep() to add a thread to sleeping list. The list is sorted
+ * Used by Thread::sleep() and pthread_cond_timedwait() to add a thread to sleeping list. The list is sorted
  * by the wakeup_time field to reduce time required to wake threads during
  * context switch.
  * Also sets thread SLEEP_FLAG. It is labeled IRQ not because it is meant to be
@@ -286,6 +286,14 @@ void IRQaddToSleepingList(SleepData *x)
     //    ContextSwitchTimer::instance().IRQsetNextInterrupt(sleepingList->front()->wakeup_time);
 }
 
+/**
+ * \internal
+ * Used by pthread_cond_timedwait() to remove a thread from sleeping list in case that it
+ * is woke up by a signal or broadcast.
+ * It is labeled IRQ not because it is meant to be
+ * used inside an IRQ, but because interrupts must be disabled prior to calling
+ * this function.
+ */
 void IRQremoveFromSleepingList(SleepData *x)
 {
     auto sleep_i = IntrusiveList<SleepData>::iterator(x);

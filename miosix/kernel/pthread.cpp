@@ -286,8 +286,8 @@ int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
     // TODO: Fix the size of the buffer and uncomment this
     // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
 
+    // Using placement mechanism to instantiate an IntrusiveList inside the cond variable
     new (cond) IntrusiveList<CondData>;
-
     return 0;
 }
 
@@ -298,6 +298,7 @@ int pthread_cond_destroy(pthread_cond_t *cond)
     auto *condList = reinterpret_cast<IntrusiveList<CondData>*>(cond);
 
     if(!condList->empty()) return EBUSY;
+    // Placement destroy
     condList->~IntrusiveList<CondData>();
     return 0;
 }
@@ -324,35 +325,32 @@ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
     return 0;
 }
 
-int	pthread_cond_timedwait(pthread_cond_t *cond,
-				           pthread_mutex_t *mutex,
-				           const struct timespec *abstime)
+int	pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)
 {
-
-    // Draft
     // TODO: Fix the size of the buffer and uncomment this
     // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
     auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
     
     FastInterruptDisableLock dLock;
     Thread *p=Thread::IRQgetCurrentThread();
-    CondData listItem;
-    SleepData sleepData;
+    CondData listItem; //Element of a linked list on stack
     listItem.thread=p;
     condList->push_back(&listItem); //Putting this thread last on the list (lifo policy)
-    // WHY????
-    p->flags.IRQsetCondWait(true); 
-    p->flags.IRQsetSleep(true);
+    SleepData sleepData; //Element to put in the sleepingList
+    sleepData.p=p;
+    sleepData.wakeup_time=abstime->tv_nsec;
+    IRQaddToSleepingList(&sleepData); //Putting this thread on the sleeping list too
+    p->flags.IRQsetCondWait(true);
 
     unsigned int depth=IRQdoMutexUnlockAllDepthLevels(mutex);
     {
         FastInterruptEnableLock eLock(dLock);
-        sleepData.p=p;
-        // Why is this abstime?
-        sleepData.wakeup_time=abstime->tv_nsec;
         Thread::yield(); //Here the wait becomes effective
     }
     auto cond_i = IntrusiveList<CondData>::iterator(&listItem);
+    //Ensure that the thread is removed from both list, as it can be woken by either
+    //a signal/broadcast (that removes it from condList) or by IRQwakeThreads (that removes it from sleeping list).
+    //The erase function will just return if the item has already been removed
     condList->erase(cond_i);
     IRQremoveFromSleepingList(&sleepData);
     IRQdoMutexLockToDepth(mutex,dLock,depth);
@@ -375,8 +373,8 @@ int pthread_cond_signal(pthread_cond_t *cond)
         Thread *t=condList->front()->thread;
         t->flags.IRQsetCondWait(false);
         condList->pop_front();
-        if (t->flags.isSleeping())
-            t->flags.IRQsetSleep(false);
+        //Need to reset the sleep flag to ensure wakeup of threads in timedwait
+        t->flags.IRQsetSleep(false);
 
         #ifdef SCHED_TYPE_EDF
         if(t->IRQgetPriority() >Thread::IRQgetCurrentThread()->IRQgetPriority())
@@ -405,8 +403,8 @@ int pthread_cond_broadcast(pthread_cond_t *cond)
             Thread *t=cond->thread;
             t->flags.IRQsetCondWait(false);
             condList->pop_front();
-            if (t->flags.isSleeping())
-                t->flags.IRQsetSleep(false);
+            //Need to reset the sleep flag to ensure wakeup of threads in timedwait
+            t->flags.IRQsetSleep(false);
 
             #ifdef SCHED_TYPE_EDF
             if(t->IRQgetPriority() >
