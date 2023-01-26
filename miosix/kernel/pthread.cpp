@@ -327,6 +327,8 @@ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
 
 int	pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)
 {
+    if (abstime->tv_nsec<=0)
+        return EINVAL;
     // TODO: Fix the size of the buffer and uncomment this
     // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
     auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
@@ -351,7 +353,9 @@ int	pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const s
     //Ensure that the thread is removed from both list, as it can be woken by either
     //a signal/broadcast (that removes it from condList) or by IRQwakeThreads (that removes it from sleeping list).
     //The erase function will just return if the item has already been removed
-    condList->erase(cond_i);
+    auto next = condList->erase(cond_i);
+    if (next!=cond_i) //If the thread was still in the cond variable list, it was woken up by a timeout
+        return ETIMEDOUT;
     IRQremoveFromSleepingList(&sleepData);
     IRQdoMutexLockToDepth(mutex,dLock,depth);
     return 0;

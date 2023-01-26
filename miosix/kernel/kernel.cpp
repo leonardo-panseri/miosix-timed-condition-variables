@@ -322,8 +322,7 @@ bool IRQwakeThreads(long long currentTime)
         if((*it)->p == nullptr) ++it; //Only csRecord has p==nullptr
         else {
             (*it)->p->flags.IRQsetSleep(false); //Wake thread
-            if((*it)->p->flags.isWaitingCond())
-                (*it)->p->flags.IRQsetCondWait(false);
+            (*it)->p->flags.IRQsetCondWait(false); //Reset cond wait flag to wakeup threads in pthread_cond_timedwait() too
             if (const_cast<Thread*>(cur)->getPriority() < (*it)->p->getPriority())
                 result = true;
             it = sleepingList->erase(it);
