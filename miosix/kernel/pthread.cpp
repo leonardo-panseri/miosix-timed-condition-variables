@@ -283,8 +283,7 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex)
 //attr is currently not considered
 int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
 {
-    // TODO: Fix the size of the buffer and uncomment this
-    // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
+    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
 
     // Using placement mechanism to instantiate an IntrusiveList inside the cond variable
     new (cond) IntrusiveList<CondData>;
@@ -293,8 +292,7 @@ int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
 
 int pthread_cond_destroy(pthread_cond_t *cond)
 {
-    // TODO: Fix the size of the buffer and uncomment this
-    // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
+    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
     auto *condList = reinterpret_cast<IntrusiveList<CondData>*>(cond);
 
     if(!condList->empty()) return EBUSY;
@@ -305,8 +303,7 @@ int pthread_cond_destroy(pthread_cond_t *cond)
 
 int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
 {
-    // TODO: Fix the size of the buffer and uncomment this
-    // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
+    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
     auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
 
     FastInterruptDisableLock dLock;
@@ -329,8 +326,7 @@ int	pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const s
 {
     if (abstime->tv_nsec<=0)
         return EINVAL;
-    // TODO: Fix the size of the buffer and uncomment this
-    // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
+    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
     auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
     
     FastInterruptDisableLock dLock;
@@ -363,8 +359,7 @@ int	pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const s
 
 int pthread_cond_signal(pthread_cond_t *cond)
 {
-    // TODO: Fix the size of the buffer and uncomment this
-    // static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond));
+    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
     auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
 
     #ifdef SCHED_TYPE_EDF
@@ -394,17 +389,17 @@ int pthread_cond_signal(pthread_cond_t *cond)
 
 int pthread_cond_broadcast(pthread_cond_t *cond)
 {
+    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
+    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
+
     #ifdef SCHED_TYPE_EDF
     bool hppw=false;
     #endif //SCHED_TYPE_EDF
-    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
-
     {
         FastInterruptDisableLock lock;
         while(!condList->empty())
         {
-            CondData *cond=condList->front();
-            Thread *t=cond->thread;
+            Thread *t=condList->front()->thread;
             t->flags.IRQsetCondWait(false);
             condList->pop_front();
             //Need to reset the sleep flag to ensure wakeup of threads in timedwait
