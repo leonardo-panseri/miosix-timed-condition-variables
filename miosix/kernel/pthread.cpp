@@ -351,10 +351,12 @@ int	pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const s
     //a signal/broadcast (that removes it from condList) or by IRQwakeThreads (that removes it from sleeping list).
     //The erase function will just return if the item has already been removed
     auto next = condList->erase(cond_i);
+    IRQremoveFromSleepingList(&sleepData);
+
+    IRQdoMutexLockToDepth(mutex,dLock,depth);
+
     if (next!=cond_i) //If the thread was still in the cond variable list, it was woken up by a timeout
         return ETIMEDOUT;
-    IRQremoveFromSleepingList(&sleepData);
-    IRQdoMutexLockToDepth(mutex,dLock,depth);
     return 0;
 }
 
