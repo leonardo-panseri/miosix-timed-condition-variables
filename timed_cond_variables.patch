@@ -1,0 +1,290 @@
+Index: miosix/kernel/pthread.cpp
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/miosix/kernel/pthread.cpp b/miosix/kernel/pthread.cpp
+--- a/miosix/kernel/pthread.cpp	(revision 49e0dad732807c14f3f8b71aaa34ff66c32d1b89)
++++ b/miosix/kernel/pthread.cpp	(revision d17cf2f08813c071781fab9c85942f071aa0fb09)
+@@ -38,6 +38,7 @@
+ #include "kernel.h"
+ #include "error.h"
+ #include "pthread_private.h"
++#include "timeconversion.h"
+ 
+ using namespace miosix;
+ 
+@@ -54,7 +55,6 @@
+ //
+ // Thread related API
+ //
+-
+ int pthread_create(pthread_t *pthread, const pthread_attr_t *attr,
+     void *(*start)(void *), void *arg)
+ {
+@@ -281,36 +281,64 @@
+ //
+ // Condition variable API
+ //
+-
+-int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
+-{
+-    //attr is currently not considered
+-    cond->first=0;
+-    //No need to initialize cond->last
++//attr is currently not considered
++int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr)
++{
++    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
++
++    // Using placement mechanism to instantiate an IntrusiveList inside the cond variable
++    new (cond) IntrusiveList<CondData>;
+     return 0;
+ }
+ 
+ int pthread_cond_destroy(pthread_cond_t *cond)
+ {
+-    if(cond->first!=0) return EBUSY;
++    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
++    auto *condList = reinterpret_cast<IntrusiveList<CondData>*>(cond);
++
++    if(!condList->empty()) return EBUSY;
++    // Placement destroy
++    condList->~IntrusiveList<CondData>();
+     return 0;
+ }
+ 
+ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
+ {
++    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
++    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
++
++    FastInterruptDisableLock dLock;
++    Thread *p=Thread::IRQgetCurrentThread();
++    CondData listItem; //Element of a linked list on stack
++    listItem.thread=p;
++    condList->push_back(&listItem); //Putting this thread last on the list (lifo policy)
++    p->flags.IRQsetCondWait(true);
++
++    unsigned int depth=IRQdoMutexUnlockAllDepthLevels(mutex);
++    {
++        FastInterruptEnableLock eLock(dLock);
++        Thread::yield(); //Here the wait becomes effective
++    }
++    IRQdoMutexLockToDepth(mutex,dLock,depth);
++    return 0;
++}
++
++int	pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime)
++{
++    if (abstime->tv_nsec<=0)
++        return EINVAL;
++    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
++    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
++    
+     FastInterruptDisableLock dLock;
+     Thread *p=Thread::IRQgetCurrentThread();
+-    WaitingList waiting; //Element of a linked list on stack
+-    waiting.thread=reinterpret_cast<void*>(p);
+-    waiting.next=0; //Putting this thread last on the list (lifo policy)
+-    if(cond->first==0)
+-    {
+-        cond->first=&waiting;
+-        cond->last=&waiting;
+-    } else {
+-        cond->last->next=&waiting;
+-        cond->last=&waiting;
+-    }
++    CondData listItem; //Element of a linked list on stack
++    listItem.thread=p;
++    condList->push_back(&listItem); //Putting this thread last on the list (lifo policy)
++    SleepData sleepData; //Element to put in the sleepingList
++    sleepData.p=p;
++    sleepData.wakeup_time=mul32x32to64(abstime->tv_sec, 1000000000) + abstime->tv_nsec;
++    IRQaddToSleepingList(&sleepData); //Putting this thread on the sleeping list too
+     p->flags.IRQsetCondWait(true);
+ 
+     unsigned int depth=IRQdoMutexUnlockAllDepthLevels(mutex);
+@@ -318,22 +346,37 @@
+         FastInterruptEnableLock eLock(dLock);
+         Thread::yield(); //Here the wait becomes effective
+     }
++    auto cond_i = IntrusiveList<CondData>::iterator(&listItem);
++    //Ensure that the thread is removed from both list, as it can be woken by either
++    //a signal/broadcast (that removes it from condList) or by IRQwakeThreads (that removes it from sleeping list).
++    //The erase function will just return if the item has already been removed
++    auto next = condList->erase(cond_i);
++    IRQremoveFromSleepingList(&sleepData);
++
+     IRQdoMutexLockToDepth(mutex,dLock,depth);
++
++    if (next!=cond_i) //If the thread was still in the cond variable list, it was woken up by a timeout
++        return ETIMEDOUT;
+     return 0;
+ }
+ 
+ int pthread_cond_signal(pthread_cond_t *cond)
+ {
++    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
++    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
++
+     #ifdef SCHED_TYPE_EDF
+     bool hppw=false;
+     #endif //SCHED_TYPE_EDF
+     {
+         FastInterruptDisableLock dLock;
+-        if(cond->first==0) return 0;
++        if(condList->empty()) return 0;
+ 
+-        Thread *t=reinterpret_cast<Thread*>(cond->first->thread);
++        Thread *t=condList->front()->thread;
+         t->flags.IRQsetCondWait(false);
+-        cond->first=cond->first->next;
++        condList->pop_front();
++        //Need to reset the sleep flag to ensure wakeup of threads in timedwait
++        t->flags.IRQsetSleep(false);
+ 
+         #ifdef SCHED_TYPE_EDF
+         if(t->IRQgetPriority() >Thread::IRQgetCurrentThread()->IRQgetPriority())
+@@ -349,16 +392,21 @@
+ 
+ int pthread_cond_broadcast(pthread_cond_t *cond)
+ {
++    static_assert(sizeof(IntrusiveList<CondData>)==sizeof(*cond), "Invalid pthread_cond_t size");
++    auto *condList=reinterpret_cast<IntrusiveList<CondData>*>(cond);
++
+     #ifdef SCHED_TYPE_EDF
+     bool hppw=false;
+     #endif //SCHED_TYPE_EDF
+     {
+         FastInterruptDisableLock lock;
+-        while(cond->first!=0)
++        while(!condList->empty())
+         {
+-            Thread *t=reinterpret_cast<Thread*>(cond->first->thread);
++            Thread *t=condList->front()->thread;
+             t->flags.IRQsetCondWait(false);
+-            cond->first=cond->first->next;
++            condList->pop_front();
++            //Need to reset the sleep flag to ensure wakeup of threads in timedwait
++            t->flags.IRQsetSleep(false);
+ 
+             #ifdef SCHED_TYPE_EDF
+             if(t->IRQgetPriority() >
+@@ -369,7 +417,7 @@
+     #ifdef SCHED_TYPE_EDF
+     //If at least one of the woken thread has higher, yield
+     if(hppw) Thread::yield();
+-    #endif //SCHED_TYPE_EDF
++    #endif //SCHED_TYPE_EDF*/
+     return 0;
+ }
+ 
+Index: miosix/kernel/kernel.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/miosix/kernel/kernel.h b/miosix/kernel/kernel.h
+--- a/miosix/kernel/kernel.h	(revision 202aa91f8a022fb99105f96a09fb207ecc119354)
++++ b/miosix/kernel/kernel.h	(revision fe7c1400fe71d6235545f1e9fe5077d2670f5394)
+@@ -419,6 +419,8 @@
+ class MemoryProfiling;
+ class Mutex;
+ class ConditionVariable;
++void IRQaddToSleepingList(SleepData *x);
++void IRQremoveFromSleepingList(SleepData *x);
+ #ifdef WITH_PROCESSES
+ class ProcessBase;
+ #endif //WITH_PROCESSES
+@@ -1031,6 +1033,8 @@
+     friend void miosix_private::IRQstackOverflowCheck();
+     //Need access to status
+     friend void IRQaddToSleepingList(SleepData *x);
++    //Need access to status
++    friend void IRQremoveFromSleepingList(SleepData *x);
+     //Needs access to status
+     friend bool IRQwakeThreads(long long currentTick);
+     //Needs access to watermark, status, next
+@@ -1052,6 +1056,8 @@
+     friend class EDFScheduler;
+     //Needs access to flags
+     friend int ::pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex);
++    //Needs access to flags
++    friend int ::pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime);
+     //Needs access to flags
+     friend int ::pthread_cond_signal(pthread_cond_t *cond);
+     //Needs access to flags
+Index: miosix/kernel/kernel.cpp
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/miosix/kernel/kernel.cpp b/miosix/kernel/kernel.cpp
+--- a/miosix/kernel/kernel.cpp	(revision 3b98f392903104ce7b1dcc80bb82a8d0bfc4f85b)
++++ b/miosix/kernel/kernel.cpp	(revision 8e0bf225fe849cae97184c77c142ba1ad7295768)
+@@ -264,7 +264,7 @@
+ 
+ /**
+  * \internal
+- * Used by Thread::sleep() to add a thread to sleeping list. The list is sorted
++ * Used by Thread::sleep() and pthread_cond_timedwait() to add a thread to sleeping list. The list is sorted
+  * by the wakeup_time field to reduce time required to wake threads during
+  * context switch.
+  * Also sets thread SLEEP_FLAG. It is labeled IRQ not because it is meant to be
+@@ -286,6 +286,20 @@
+     //    ContextSwitchTimer::instance().IRQsetNextInterrupt(sleepingList->front()->wakeup_time);
+ }
+ 
++/**
++ * \internal
++ * Used by pthread_cond_timedwait() to remove a thread from sleeping list in case that it
++ * is woke up by a signal or broadcast.
++ * It is labeled IRQ not because it is meant to be
++ * used inside an IRQ, but because interrupts must be disabled prior to calling
++ * this function.
++ */
++void IRQremoveFromSleepingList(SleepData *x)
++{
++    auto sleep_i = IntrusiveList<SleepData>::iterator(x);
++    sleepingList->erase(sleep_i);
++}
++
+ /**
+  * \internal
+  * Called to check if it's time to wake some thread.
+@@ -308,6 +322,7 @@
+         if((*it)->p == nullptr) ++it; //Only csRecord has p==nullptr
+         else {
+             (*it)->p->flags.IRQsetSleep(false); //Wake thread
++            (*it)->p->flags.IRQsetCondWait(false); //Reset cond wait flag to wakeup threads in pthread_cond_timedwait() too
+             if (const_cast<Thread*>(cur)->getPriority() < (*it)->p->getPriority())
+                 result = true;
+             it = sleepingList->erase(it);
+Index: miosix/kernel/pthread_private.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/miosix/kernel/pthread_private.h b/miosix/kernel/pthread_private.h
+--- a/miosix/kernel/pthread_private.h	(revision 520b2f8897fc6485a1bc58dde75cc6a77c8c975d)
++++ b/miosix/kernel/pthread_private.h	(revision fe7c1400fe71d6235545f1e9fe5077d2670f5394)
+@@ -216,6 +216,18 @@
+     return result;
+ }
+ 
++/**
++ * \internal
++ * \struct CondData
++ * This struct is used to make a list of threads that are waiting on a condition variable.
++ * It is used by the kernel, and should not be used by end users.
++ */
++struct CondData : public IntrusiveListItem
++{
++    ///\internal Thread that is waiting
++    Thread *thread;
++};
++
+ } //namespace miosix
+ 
+ #endif //PTHREAD_PRIVATE_H

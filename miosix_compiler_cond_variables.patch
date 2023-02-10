@@ -1,0 +1,23 @@
+Index: arm-miosix-eabi/include/sys/_pthreadtypes.h
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/arm-miosix-eabi/include/sys/_pthreadtypes.h b/arm-miosix-eabi/include/sys/_pthreadtypes.h
+--- a/arm-miosix-eabi/include/sys/_pthreadtypes.h	(date 1674733460834)
++++ b/arm-miosix-eabi/include/sys/_pthreadtypes.h	(date 1674733460834)
+@@ -200,13 +200,10 @@
+ #define _PTHREAD_COND_INITIALIZER ((pthread_cond_t) 0xFFFFFFFF)
+ #else /* _MIOSIX */
+ /*
+- * The definition of pthread_cond_t has been changed from an int to a struct
++ * The definition of pthread_cond_t has been changed from an int to a buffer
+  * containing the actual condition variable implementation for speed reasons.
+- * Note: the definition of struct WaitingList is in sys/lock.h
+  * typedef __uint32_t pthread_cond_t;
+  */
+-struct WaitingList;
+-
+ typedef __uint32_t pthread_cond_t[5];
+ 
+ #define _PTHREAD_COND_INITIALIZER {0,0,0,0,0}
